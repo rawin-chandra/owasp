@@ -1,0 +1,414 @@
+<?php
+/**
+ * =====================================================
+ *  A01:2021 — Broken Access Control
+ *  ตัวอย่างช่องโหว่และวิธีแก้ไข
+ * =====================================================
+ *  Scenarios:
+ *  1. IDOR — เข้าถึง resource ของคนอื่นผ่าน ID
+ *  2. Privilege Escalation — เพิ่มสิทธิ์ตัวเองเป็น admin
+ *  3. Method Bypass — เข้า admin endpoint ผ่าน GET
+ *  4. Missing Auth — endpoint ที่ไม่มีการตรวจสอบ
+ * =====================================================
+ */
+
+session_start();
+
+// ─────────────────────────────────────────────────────
+// Mock Database / Session
+// ─────────────────────────────────────────────────────
+
+// จำลอง user ที่ login อยู่ (user ปกติ id=2)
+$_SESSION['user_id'] = 2;
+$_SESSION['role']    = 'user';
+
+// จำลองข้อมูล orders ในฐานข้อมูล
+$fake_orders = [
+    1 => ['id'=>1, 'user_id'=>1, 'item'=>'MacBook Pro',  'price'=>89000, 'email'=>'alice@email.com'],
+    2 => ['id'=>2, 'user_id'=>2, 'item'=>'AirPods',      'price'=>7900,  'email'=>'bob@email.com'],
+    3 => ['id'=>3, 'user_id'=>3, 'item'=>'iPhone 15',    'price'=>39900, 'email'=>'carol@email.com'],
+    4 => ['id'=>4, 'user_id'=>1, 'item'=>'iPad Pro',     'price'=>35900, 'email'=>'alice@email.com'],
+];
+
+$fake_users = [
+    1 => ['id'=>1, 'username'=>'alice', 'role'=>'admin',  'email'=>'alice@email.com',  'salary'=>120000],
+    2 => ['id'=>2, 'username'=>'bob',   'role'=>'user',   'email'=>'bob@email.com',    'salary'=>45000],
+    3 => ['id'=>3, 'username'=>'carol', 'role'=>'user',   'email'=>'carol@email.com',  'salary'=>52000],
+];
+
+?>
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <title>A01:2021 — Broken Access Control Demo</title>
+    <style>
+        body  { font-family:Arial,sans-serif; max-width:960px; margin:40px auto; padding:0 20px; background:#f5f5f5; }
+        h1    { color:#c0392b; }
+        h2    { color:#2c3e50; border-bottom:2px solid #e74c3c; padding-bottom:8px; margin-top:36px; }
+        .card { background:white; border-radius:8px; padding:24px; margin-bottom:20px; box-shadow:0 2px 8px rgba(0,0,0,.1); }
+        .danger  { border-left:5px solid #e74c3c; }
+        .safe    { border-left:5px solid #27ae60; }
+        .label-d { display:inline-block; background:#e74c3c; color:white; padding:3px 10px; border-radius:4px; font-size:12px; margin-bottom:12px; }
+        .label-s { display:inline-block; background:#27ae60; color:white; padding:3px 10px; border-radius:4px; font-size:12px; margin-bottom:12px; }
+        pre   { background:#1e1e2e; color:#cdd6f4; padding:16px; border-radius:6px; font-size:12.5px; line-height:1.7; overflow-x:auto; }
+        .bad  { color:#f38ba8; }
+        .ok   { color:#a6e3a1; }
+        .cmt  { color:#6c7086; }
+        .attack-box { background:#fff3cd; border:1px solid #ffc107; border-radius:4px; padding:12px 16px; margin:12px 0; font-size:13px; }
+        .result-d { background:#fde8e8; color:#c0392b; border:1px solid #e74c3c; border-radius:4px; padding:10px 14px; margin-top:10px; font-size:13px; }
+        .result-s { background:#e8f5e9; color:#1b5e20; border:1px solid #27ae60; border-radius:4px; padding:10px 14px; margin-top:10px; font-size:13px; }
+        input[type=number],input[type=text] { padding:8px 12px; border:1px solid #ddd; border-radius:4px; width:200px; margin-right:8px; }
+        button { padding:8px 20px; border:none; border-radius:4px; cursor:pointer; font-size:13px; }
+        .btn-d { background:#e74c3c; color:white; }
+        .btn-s { background:#27ae60; color:white; }
+        table  { width:100%; border-collapse:collapse; font-size:13px; margin-top:10px; }
+        th     { background:#2c3e50; color:white; padding:10px; text-align:left; }
+        td     { padding:9px 10px; border-bottom:1px solid #eee; }
+        tr:hover td { background:#f9f9f9; }
+        .session-box { background:#eaf4fb; border:1px solid #3498db; border-radius:6px; padding:14px 18px; margin-bottom:20px; font-size:13px; }
+    </style>
+</head>
+<body>
+
+<h1>🔓 A01:2021 — Broken Access Control</h1>
+
+<div class="session-box">
+    <strong>Session ปัจจุบัน:</strong>
+    user_id = <strong><?= $_SESSION['user_id'] ?></strong> |
+    username = <strong>bob</strong> |
+    role = <strong><?= $_SESSION['role'] ?></strong>
+    <br><small>bob เป็น user ปกติ — ไม่มีสิทธิ์เข้าถึงข้อมูลของ alice หรือ carol</small>
+</div>
+
+<!-- ═══════════════════════════════════════════════════
+     SCENARIO 1: IDOR
+════════════════════════════════════════════════════ -->
+<h2>Scenario 1 — IDOR (Insecure Direct Object Reference)</h2>
+<p style="color:#666;font-size:14px">เปลี่ยน order ID ใน URL เพื่อดูข้อมูลของคนอื่น</p>
+
+<div class="card danger">
+    <span class="label-d">❌ VULNERABLE</span>
+    <h3 style="margin-top:0">ไม่ตรวจสอบ ownership</h3>
+
+    <div class="attack-box">
+        <strong>Attack:</strong> bob (user_id=2) เปลี่ยน order_id เป็น 1 หรือ 3
+        เพื่อดูข้อมูลของ alice และ carol<br>
+        <small>bob มี order แค่ id=2 แต่สามารถดู id=1,3,4 ได้</small>
+    </div>
+
+    <form method="GET">
+        <input type="hidden" name="scenario" value="idor_vuln">
+        Order ID: <input type="number" name="order_id" value="<?= htmlspecialchars($_GET['order_id'] ?? '1') ?>" min="1" max="4">
+        <button type="submit" class="btn-d">GET /orders/{id} (Vulnerable)</button>
+    </form>
+
+    <?php
+    if (($_GET['scenario'] ?? '') === 'idor_vuln') {
+        $order_id = (int)$_GET['order_id'];
+
+        // ❌ ไม่ตรวจสอบว่า order เป็นของ user คนนี้หรือไม่
+        $order = $fake_orders[$order_id] ?? null;
+
+        if ($order) {
+            $is_own = $order['user_id'] === $_SESSION['user_id'];
+            echo "<div class='result-d'>
+                <strong>⚠ 200 OK — bob เข้าถึงข้อมูลได้:</strong><br>
+                Order #" . $order['id'] . " | " . htmlspecialchars($order['item']) . "
+                | ราคา: " . number_format($order['price']) . " บาท
+                | อีเมล: " . htmlspecialchars($order['email']) . "
+                " . ($is_own ? "<span style='color:green'>(เป็นของ bob)</span>" : "<span style='color:red'>⚠ เป็นของคนอื่น! (user_id={$order['user_id']})</span>") . "
+            </div>";
+        } else {
+            echo "<div class='result-s'>404 — ไม่พบ order</div>";
+        }
+    }
+    ?>
+
+    <pre><span class="cmt">// ❌ Vulnerable — ดึงตาม ID โดยตรง ไม่ตรวจ ownership</span>
+<span class="bad">$order_id = $_GET['order_id'];
+$order    = $db->query("SELECT * FROM orders WHERE id = $order_id");
+// ทุกคนเข้าได้ทุก order!</span></pre>
+</div>
+
+<div class="card safe">
+    <span class="label-s">✅ SAFE</span>
+    <h3 style="margin-top:0">ตรวจสอบ ownership ก่อนคืนข้อมูล</h3>
+
+    <form method="GET">
+        <input type="hidden" name="scenario" value="idor_safe">
+        Order ID: <input type="number" name="order_id" value="<?= htmlspecialchars($_GET['order_id'] ?? '1') ?>" min="1" max="4">
+        <button type="submit" class="btn-s">GET /orders/{id} (Safe)</button>
+    </form>
+
+    <?php
+    if (($_GET['scenario'] ?? '') === 'idor_safe') {
+        $order_id      = (int)$_GET['order_id'];
+        $current_user  = $_SESSION['user_id'];
+        $order         = $fake_orders[$order_id] ?? null;
+
+        if (!$order) {
+            echo "<div class='result-s'>404 — ไม่พบ order</div>";
+        } elseif ($order['user_id'] !== $current_user) {
+            // ✓ ตรวจสอบ ownership — คืน 403 ถ้าไม่ใช่เจ้าของ
+            echo "<div class='result-s'>
+                <strong>403 Forbidden</strong><br>
+                ✓ Server ปฏิเสธ — order #$order_id ไม่ใช่ของ bob (user_id=$current_user)
+            </div>";
+        } else {
+            echo "<div class='result-s'>
+                ✓ 200 OK — bob ดูได้เฉพาะ order ของตัวเอง:<br>
+                Order #" . $order['id'] . " | " . htmlspecialchars($order['item']) . " | " . number_format($order['price']) . " บาท
+            </div>";
+        }
+    }
+    ?>
+
+    <pre><span class="cmt">// ✓ Safe — ตรวจสอบ ownership ก่อนคืนข้อมูล</span>
+<span class="ok">$stmt = $pdo->prepare(
+    "SELECT * FROM orders
+     WHERE id = ? AND user_id = ?"   // ← WHERE ทั้ง id และ user_id
+);
+$stmt->execute([$order_id, $_SESSION['user_id']]);
+$order = $stmt->fetch();
+
+if (!$order) {
+    http_response_code(403);
+    echo json_encode(['error' => 'Forbidden']);
+    exit;
+}</span></pre>
+</div>
+
+<!-- ═══════════════════════════════════════════════════
+     SCENARIO 2: Privilege Escalation
+════════════════════════════════════════════════════ -->
+<h2>Scenario 2 — Privilege Escalation (Mass Assignment)</h2>
+<p style="color:#666;font-size:14px">แก้ role ตัวเองเป็น admin ผ่าน request body</p>
+
+<div class="card danger">
+    <span class="label-d">❌ VULNERABLE</span>
+    <h3 style="margin-top:0">รับ role จาก request body โดยตรง</h3>
+
+    <div class="attack-box">
+        <strong>Attack:</strong> bob ส่ง PATCH พร้อม <code>"role": "admin"</code>
+        ใน body — server update ทุก field โดยไม่กรอง
+    </div>
+
+    <form method="POST">
+        <input type="hidden" name="scenario" value="priv_vuln">
+        <input type="hidden" name="name" value="bob">
+        <input type="hidden" name="email" value="bob@email.com">
+        <input type="hidden" name="role" value="admin">
+        <button type="submit" class="btn-d">PATCH /users/me (body: role=admin)</button>
+    </form>
+
+    <?php
+    if (($_POST['scenario'] ?? '') === 'priv_vuln') {
+        // ❌ รับทุก field จาก $_POST โดยตรง (Mass Assignment)
+        $update = $_POST;
+        unset($update['scenario']);
+
+        echo "<div class='result-d'>
+            <strong>⚠ 200 OK — role ถูกอัปเดตเป็น:</strong> " . htmlspecialchars($update['role'] ?? '') . "<br>
+            <small>bob เพิ่งยกระดับตัวเองเป็น admin ได้!</small>
+        </div>";
+        echo "<pre>" . htmlspecialchars(json_encode($update, JSON_PRETTY_PRINT)) . "</pre>";
+    }
+    ?>
+
+    <pre><span class="cmt">// ❌ Vulnerable — อัปเดตทุก field ที่รับมา</span>
+<span class="bad">$data = $_POST;           // รับทั้งหมดจาก body
+$pdo->prepare("UPDATE users SET name=?, email=?, role=? WHERE id=?")
+    ->execute([$data['name'], $data['email'], $data['role'], $_SESSION['user_id']]);
+// attacker ส่ง role=admin → กลายเป็น admin ทันที!</span></pre>
+</div>
+
+<div class="card safe">
+    <span class="label-s">✅ SAFE</span>
+    <h3 style="margin-top:0">ใช้ allowlist — รับเฉพาะ field ที่อนุญาต</h3>
+
+    <form method="POST">
+        <input type="hidden" name="scenario" value="priv_safe">
+        <input type="hidden" name="name" value="bob">
+        <input type="hidden" name="email" value="bob@email.com">
+        <input type="hidden" name="role" value="admin">
+        <button type="submit" class="btn-s">PATCH /users/me (Safe)</button>
+    </form>
+
+    <?php
+    if (($_POST['scenario'] ?? '') === 'priv_safe') {
+        // ✓ allowlist — รับเฉพาะ name และ email เท่านั้น
+        $allowed = ['name', 'email'];
+        $safe = array_intersect_key($_POST, array_flip($allowed));
+
+        echo "<div class='result-s'>
+            ✓ 200 OK — อัปเดตได้เฉพาะ field ที่อนุญาต:<br>
+            " . htmlspecialchars(json_encode($safe)) . "<br>
+            <strong>role ไม่ถูกแตะต้อง</strong> — bob ยังเป็น user
+        </div>";
+    }
+    ?>
+
+    <pre><span class="cmt">// ✓ Safe — allowlist field ที่อนุญาต</span>
+<span class="ok">$allowed = ['name', 'email'];  // role ไม่อยู่ใน list
+$safe    = array_intersect_key($_POST, array_flip($allowed));
+
+$stmt = $pdo->prepare(
+    "UPDATE users SET name=?, email=? WHERE id=?"
+);
+$stmt->execute([$safe['name'], $safe['email'], $_SESSION['user_id']]);</span></pre>
+</div>
+
+<!-- ═══════════════════════════════════════════════════
+     SCENARIO 3: Method Bypass
+════════════════════════════════════════════════════ -->
+<h2>Scenario 3 — Missing Access Control on HTTP Method</h2>
+<p style="color:#666;font-size:14px">admin endpoint ที่ตรวจ POST แต่ลืมตรวจ GET</p>
+
+<div class="card danger">
+    <span class="label-d">❌ VULNERABLE</span>
+    <h3 style="margin-top:0">GET /admin/users ไม่มี middleware</h3>
+
+    <div class="attack-box">
+        <strong>Attack:</strong> bob ส่ง GET แทน POST — ไม่มีการตรวจสอบ role
+        ทำให้ดึงข้อมูล user ทั้งหมดรวมถึง salary ได้
+    </div>
+
+    <form method="GET">
+        <input type="hidden" name="scenario" value="method_vuln">
+        <button type="submit" class="btn-d">GET /admin/users (ลืมใส่ middleware)</button>
+    </form>
+
+    <?php
+    if (($_GET['scenario'] ?? '') === 'method_vuln') {
+        // ❌ ไม่ตรวจสอบ role สำหรับ GET request
+        echo "<div class='result-d'>⚠ 200 OK — ข้อมูล users ทั้งหมดรั่ว!</div>";
+        echo "<table>
+            <tr><th>id</th><th>username</th><th>role</th><th>email</th><th>salary ⚠</th></tr>";
+        foreach ($fake_users as $u) {
+            echo "<tr>
+                <td>{$u['id']}</td>
+                <td>" . htmlspecialchars($u['username']) . "</td>
+                <td>{$u['role']}</td>
+                <td>" . htmlspecialchars($u['email']) . "</td>
+                <td style='color:#c0392b'>" . number_format($u['salary']) . " บาท</td>
+            </tr>";
+        }
+        echo "</table>";
+    }
+    ?>
+
+    <pre><span class="cmt">// ❌ Vulnerable — POST ตรวจ role แต่ GET ลืมตรวจ</span>
+<span class="bad">// POST /admin/users → มี requireAdmin() middleware
+Router::post('/admin/users', 'requireAdmin', 'createUser');
+
+// GET /admin/users → ลืมใส่ middleware!
+Router::get('/admin/users', 'listUsers');  // ← ไม่มี requireAdmin</span></pre>
+</div>
+
+<div class="card safe">
+    <span class="label-s">✅ SAFE</span>
+    <h3 style="margin-top:0">ทุก method ต้องผ่าน middleware</h3>
+
+    <form method="GET">
+        <input type="hidden" name="scenario" value="method_safe">
+        <button type="submit" class="btn-s">GET /admin/users (มี middleware)</button>
+    </form>
+
+    <?php
+    if (($_GET['scenario'] ?? '') === 'method_safe') {
+        // ✓ ตรวจสอบ role ทุก method
+        if ($_SESSION['role'] !== 'admin') {
+            echo "<div class='result-s'>
+                <strong>403 Forbidden</strong><br>
+                ✓ bob (role=user) ไม่มีสิทธิ์เข้า /admin/users
+            </div>";
+        }
+    }
+    ?>
+
+    <pre><span class="cmt">// ✓ Safe — ทุก method ผ่าน requireAdmin</span>
+<span class="ok">function requireAdmin(): void {
+    if ($_SESSION['role'] !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Forbidden']);
+        exit;
+    }
+}
+
+// ใช้กับทุก method
+Router::get('/admin/users',    'requireAdmin', 'listUsers');
+Router::post('/admin/users',   'requireAdmin', 'createUser');
+Router::delete('/admin/users', 'requireAdmin', 'deleteUser');</span></pre>
+</div>
+
+<!-- ═══════════════════════════════════════════════════
+     SCENARIO 4: Missing Authentication
+════════════════════════════════════════════════════ -->
+<h2>Scenario 4 — Missing Authentication on Sensitive Endpoint</h2>
+
+<div class="card danger">
+    <span class="label-d">❌ VULNERABLE</span>
+    <h3 style="margin-top:0">/api/export ไม่ตรวจสอบว่า login หรือยัง</h3>
+
+    <form method="GET">
+        <input type="hidden" name="scenario" value="noauth_vuln">
+        <button type="submit" class="btn-d">GET /api/export (ไม่มี auth check)</button>
+    </form>
+
+    <?php
+    if (($_GET['scenario'] ?? '') === 'noauth_vuln') {
+        // ❌ ไม่ตรวจสอบ session / token เลย
+        echo "<div class='result-d'>⚠ 200 OK — ข้อมูลทั้งหมดถูก export โดยไม่ต้อง login!</div>";
+        echo "<pre>" . json_encode(array_values($fake_users), JSON_PRETTY_PRINT) . "</pre>";
+    }
+    ?>
+
+    <pre><span class="bad">// ❌ Vulnerable
+public function export() {
+    // ไม่มีการตรวจสอบ session เลย!
+    $users = User::all();
+    return response()->json($users);
+}</span></pre>
+</div>
+
+<div class="card safe">
+    <span class="label-s">✅ SAFE</span>
+    <h3 style="margin-top:0">ตรวจสอบ session + role ทุกครั้ง</h3>
+
+    <pre><span class="cmt">// ✓ Safe — ใช้ middleware ทุก sensitive endpoint</span>
+<span class="ok">function requireLogin(): void {
+    if (empty($_SESSION['user_id'])) {
+        http_response_code(401);
+        header('Location: /login');
+        exit;
+    }
+}
+
+function requireAdmin(): void {
+    requireLogin();
+    if ($_SESSION['role'] !== 'admin') {
+        http_response_code(403);
+        exit;
+    }
+}
+
+// Apply ทุก route ที่ต้องการ
+Router::get('/api/export', 'requireAdmin', 'exportData');</span></pre>
+</div>
+
+<!-- SUMMARY -->
+<h2>สรุป A01:2021 — วิธีป้องกัน</h2>
+<div class="card">
+    <table>
+        <tr><th>ช่องโหว่</th><th>วิธีป้องกัน</th></tr>
+        <tr><td>IDOR</td><td>ตรวจ <code>WHERE id=? AND user_id=?</code> ทุกครั้ง</td></tr>
+        <tr><td>Privilege Escalation</td><td>ใช้ allowlist field ที่อัปเดตได้</td></tr>
+        <tr><td>Method Bypass</td><td>ใส่ middleware ทุก HTTP method</td></tr>
+        <tr><td>Missing Auth</td><td>deny-by-default — ถ้าไม่ระบุสิทธิ์ให้ปฏิเสธ</td></tr>
+        <tr><td>ทุกกรณี</td><td>Log access control failures ทุกครั้ง</td></tr>
+    </table>
+</div>
+
+</body>
+</html>
