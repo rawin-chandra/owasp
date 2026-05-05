@@ -1,0 +1,326 @@
+<?php
+/**
+ * =====================================================
+ *  ตัวอย่าง SQL Injection — Vulnerable vs Safe
+ * =====================================================
+ *  ไฟล์นี้แสดงให้เห็นความแตกต่างระหว่าง
+ *  โค้ดที่มีช่องโหว่ และโค้ดที่ปลอดภัย
+ *  สำหรับการเรียนรู้เท่านั้น
+ * =====================================================
+ */
+
+// ─────────────────────────────────────────────────────
+// การเชื่อมต่อ Database
+// ─────────────────────────────────────────────────────
+$host = "localhost";
+$db   = "myapp";
+$user = "root";
+$pass = "password";
+
+// PDO connection (ใช้ทั้ง 2 ตัวอย่าง)
+try {
+    $pdo = new PDO(
+        "mysql:host=$host;dbname=$db;charset=utf8",
+        $user, $pass,
+        [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
+    );
+} catch (PDOException $e) {
+    die("Connection failed");
+}
+
+// MySQLi connection
+$mysqli = new mysqli($host, $user, $pass, $db);
+?>
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <title>SQL Injection Demo</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 900px; margin: 40px auto; padding: 0 20px; background: #f5f5f5; }
+        h1   { color: #c0392b; }
+        h2   { color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 8px; }
+        .card { background: white; border-radius: 8px; padding: 24px; margin-bottom: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+        .danger { border-left: 5px solid #e74c3c; }
+        .safe   { border-left: 5px solid #27ae60; }
+        .label-danger { display:inline-block; background:#e74c3c; color:white; padding:3px 10px; border-radius:4px; font-size:13px; margin-bottom:12px; }
+        .label-safe   { display:inline-block; background:#27ae60; color:white; padding:3px 10px; border-radius:4px; font-size:13px; margin-bottom:12px; }
+        pre  { background: #1e1e2e; color: #cdd6f4; padding: 16px; border-radius: 6px; overflow-x: auto; font-size: 13px; line-height: 1.6; }
+        .highlight { color: #f38ba8; font-weight: bold; }
+        .good      { color: #a6e3a1; font-weight: bold; }
+        .comment   { color: #6c7086; }
+        form { margin: 16px 0; }
+        input[type=text], input[type=password] { width: 100%; padding: 10px; margin: 6px 0 14px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; box-sizing: border-box; }
+        button { padding: 10px 24px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
+        .btn-danger { background: #e74c3c; color: white; }
+        .btn-safe   { background: #27ae60; color: white; }
+        .result { padding: 12px 16px; border-radius: 4px; margin-top: 12px; font-size: 14px; }
+        .result-danger { background: #fde8e8; color: #c0392b; border: 1px solid #e74c3c; }
+        .result-safe   { background: #e8f5e9; color: #1b5e20; border: 1px solid #27ae60; }
+        .attack-box { background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; padding: 12px 16px; margin: 12px 0; font-size: 13px; }
+    </style>
+</head>
+<body>
+
+<h1>🔓 SQL Injection Demo</h1>
+<p style="color:#666">ตัวอย่างนี้แสดงช่องโหว่และวิธีแก้ไข — สำหรับการเรียนรู้เท่านั้น</p>
+
+<!-- ═══════════════════════════════════════════════════
+     SCENARIO 1: Login Form
+════════════════════════════════════════════════════ -->
+<h2>Scenario 1 — Login Form</h2>
+
+<!-- Vulnerable -->
+<div class="card danger">
+    <span class="label-danger">❌ VULNERABLE</span>
+    <h3 style="margin-top:0">String Concatenation — โดน inject ได้</h3>
+
+    <div class="attack-box">
+        <strong>ลอง payload นี้:</strong><br>
+        Username: <code>admin' OR '1'='1' --</code><br>
+        Password: <code>anything</code><br>
+        <small>→ SQL จะกลายเป็น WHERE username='admin' OR '1'='1' ซึ่งเป็นจริงเสมอ</small>
+    </div>
+
+    <form method="POST" action="">
+        <input type="hidden" name="action" value="login_vulnerable">
+        <label>Username</label>
+        <input type="text" name="vuln_user" placeholder="ลอง: admin' OR '1'='1' --">
+        <label>Password</label>
+        <input type="password" name="vuln_pass" placeholder="พิมพ์อะไรก็ได้">
+        <button type="submit" class="btn-danger">Login (Vulnerable)</button>
+    </form>
+
+    <?php
+    if (isset($_POST['action']) && $_POST['action'] === 'login_vulnerable') {
+        $username = $_POST['vuln_user'];
+        $password = $_POST['vuln_pass'];
+
+        // ❌ อันตราย: ต่อ string โดยตรง
+        $sql = "SELECT * FROM users
+                WHERE username = '$username'
+                AND password = '$password'";
+
+        echo "<pre>";
+        echo "<span class='comment'>// SQL ที่ถูกสร้างขึ้น:</span>\n";
+        echo htmlspecialchars($sql);
+        echo "</pre>";
+
+        try {
+            $result = $pdo->query($sql);
+            $user   = $result->fetch(PDO::FETCH_ASSOC);
+
+            if ($user) {
+                echo "<div class='result result-danger'>
+                    ⚠️ Login สำเร็จ! พบ user: <strong>" . htmlspecialchars($user['username'] ?? 'unknown') . "</strong>
+                    (role: " . htmlspecialchars($user['role'] ?? '-') . ")
+                    <br><small>attacker เข้าได้โดยไม่รู้รหัสผ่าน!</small>
+                </div>";
+            } else {
+                echo "<div class='result result-safe'>ไม่พบ user</div>";
+            }
+        } catch (PDOException $e) {
+            echo "<div class='result result-danger'>Error: " . htmlspecialchars($e->getMessage()) . "</div>";
+        }
+    }
+    ?>
+
+    <pre><span class="comment">// โค้ดที่มีช่องโหว่:</span>
+<span class="highlight">$sql = "SELECT * FROM users
+        WHERE username = '$username'
+        AND password = '$password'";</span>
+
+<span class="comment">// ถ้า username = admin' OR '1'='1' --
+// SQL กลายเป็น:
+// SELECT * FROM users WHERE username='admin' OR '1'='1' --' AND password='x'
+// '1'='1' เป็นจริงเสมอ → ดึง user ทุกคนออกมา!</span></pre>
+</div>
+
+<!-- Safe -->
+<div class="card safe">
+    <span class="label-safe">✅ SAFE</span>
+    <h3 style="margin-top:0">Prepared Statement — ปลอดภัย</h3>
+
+    <form method="POST" action="">
+        <input type="hidden" name="action" value="login_safe">
+        <label>Username</label>
+        <input type="text" name="safe_user" placeholder="ลอง: admin' OR '1'='1' --">
+        <label>Password</label>
+        <input type="password" name="safe_pass" placeholder="พิมพ์อะไรก็ได้">
+        <button type="submit" class="btn-safe">Login (Safe)</button>
+    </form>
+
+    <?php
+    if (isset($_POST['action']) && $_POST['action'] === 'login_safe') {
+        $username = $_POST['safe_user'];
+        $password = $_POST['safe_pass'];
+
+        // ✓ ปลอดภัย: Prepared Statement
+        $stmt = $pdo->prepare(
+            "SELECT * FROM users WHERE username = ? AND password = ?"
+        );
+        $stmt->execute([$username, $password]);
+        $user = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        echo "<pre>";
+        echo "<span class='comment'>// SQL template (ไม่เปลี่ยนแปลง):</span>\n";
+        echo "SELECT * FROM users WHERE username = ? AND password = ?\n";
+        echo "<span class='comment'>// Parameters ที่ส่ง (treated as data เสมอ):</span>\n";
+        echo "['" . htmlspecialchars($username) . "', '" . htmlspecialchars($password) . "']";
+        echo "</pre>";
+
+        if ($user) {
+            echo "<div class='result result-safe'>
+                Login สำเร็จ: <strong>" . htmlspecialchars($user['username'] ?? '') . "</strong>
+            </div>";
+        } else {
+            echo "<div class='result result-safe'>
+                ✓ ไม่พบ user — payload ถูกมองเป็นข้อความ ไม่ใช่ SQL
+            </div>";
+        }
+    }
+    ?>
+
+    <pre><span class="comment">// โค้ดที่ปลอดภัย (PDO):</span>
+<span class="good">$stmt = $pdo->prepare(
+    "SELECT * FROM users WHERE username = ? AND password = ?"
+);
+$stmt->execute([$username, $password]);</span>
+
+<span class="comment">// หรือ Named Parameters (อ่านง่ายกว่า):</span>
+<span class="good">$stmt = $pdo->prepare(
+    "SELECT * FROM users WHERE username = :user AND password = :pass"
+);
+$stmt->execute([':user' => $username, ':pass' => $password]);</span></pre>
+</div>
+
+<!-- ═══════════════════════════════════════════════════
+     SCENARIO 2: Search
+════════════════════════════════════════════════════ -->
+<h2>Scenario 2 — Search / URL Parameter</h2>
+
+<div class="card danger">
+    <span class="label-danger">❌ VULNERABLE</span>
+    <h3 style="margin-top:0">URL Parameter — UNION Attack</h3>
+
+    <div class="attack-box">
+        <strong>ลอง payload นี้:</strong><br>
+        <code>' UNION SELECT username, password, null, null FROM users --</code><br>
+        <small>→ ดึง username + password จาก table users ออกมาทั้งหมด</small>
+    </div>
+
+    <form method="GET" action="">
+        <input type="hidden" name="scenario" value="search">
+        <label>ค้นหาสินค้า</label>
+        <input type="text" name="q" placeholder="ลอง: ' UNION SELECT username,password,null,null FROM users --">
+        <button type="submit" class="btn-danger">ค้นหา (Vulnerable)</button>
+    </form>
+
+    <?php
+    if (isset($_GET['scenario']) && $_GET['scenario'] === 'search') {
+        $q = $_GET['q'] ?? '';
+
+        // ❌ อันตราย
+        $sql = "SELECT id, name, price, description FROM products WHERE name LIKE '%$q%'";
+
+        echo "<pre>";
+        echo "<span class='comment'>// SQL ที่ถูกสร้าง:</span>\n";
+        echo htmlspecialchars($sql);
+        echo "</pre>";
+
+        try {
+            $result = $pdo->query($sql);
+            $rows   = $result->fetchAll(PDO::FETCH_ASSOC);
+            if ($rows) {
+                echo "<table style='width:100%;border-collapse:collapse;font-size:13px'>";
+                echo "<tr style='background:#e74c3c;color:white'>";
+                foreach (array_keys($rows[0]) as $col) {
+                    echo "<th style='padding:8px;border:1px solid #ddd'>" . htmlspecialchars($col) . "</th>";
+                }
+                echo "</tr>";
+                foreach ($rows as $row) {
+                    echo "<tr>";
+                    foreach ($row as $val) {
+                        echo "<td style='padding:8px;border:1px solid #ddd'>" . htmlspecialchars($val ?? '') . "</td>";
+                    }
+                    echo "</tr>";
+                }
+                echo "</table>";
+            }
+        } catch (PDOException $e) {
+            echo "<div class='result result-danger'>Error: " . htmlspecialchars($e->getMessage()) . "</div>";
+        }
+    }
+    ?>
+
+    <pre><span class="highlight">// ❌ อันตราย
+$sql = "SELECT * FROM products WHERE name LIKE '%$q%'";</span>
+
+<span class="comment">// UNION payload:
+// ' UNION SELECT username,password,null,null FROM users --
+// กลายเป็น:
+// SELECT * FROM products WHERE name LIKE '%'
+// UNION SELECT username,password,null,null FROM users --%'
+// → ดึง users table ออกมาแทน!</span></pre>
+</div>
+
+<!-- ═══════════════════════════════════════════════════
+     SCENARIO 3: MySQLi Prepared Statement
+════════════════════════════════════════════════════ -->
+<h2>Scenario 3 — MySQLi Prepared Statement</h2>
+
+<div class="card safe">
+    <span class="label-safe">✅ SAFE — MySQLi</span>
+    <h3 style="margin-top:0">MySQLi bind_param</h3>
+
+    <pre><span class="comment">// Safe ด้วย MySQLi Prepared Statement:</span>
+<span class="good">$stmt = $mysqli->prepare(
+    "SELECT * FROM users WHERE username = ? AND role = ?"
+);
+$stmt->bind_param("ss", $username, $role);  // s=string, i=int, d=double
+$stmt->execute();
+$result = $stmt->get_result();
+$user   = $result->fetch_assoc();</span></pre>
+</div>
+
+<!-- ═══════════════════════════════════════════════════
+     SUMMARY
+════════════════════════════════════════════════════ -->
+<h2>สรุป — เปรียบเทียบ</h2>
+<div class="card">
+    <table style="width:100%;border-collapse:collapse;font-size:14px">
+        <tr style="background:#2c3e50;color:white">
+            <th style="padding:12px;text-align:left">วิธี</th>
+            <th style="padding:12px">ปลอดภัย</th>
+            <th style="padding:12px;text-align:left">เมื่อไหร่ใช้</th>
+        </tr>
+        <tr style="background:#fde8e8">
+            <td style="padding:10px;font-family:monospace">string concat</td>
+            <td style="padding:10px;text-align:center">❌</td>
+            <td style="padding:10px;color:#c0392b">ไม่ควรใช้เด็ดขาด</td>
+        </tr>
+        <tr>
+            <td style="padding:10px;font-family:monospace">PDO prepare + ?</td>
+            <td style="padding:10px;text-align:center">✅</td>
+            <td style="padding:10px">ทุกกรณี แนะนำที่สุด</td>
+        </tr>
+        <tr style="background:#f5f5f5">
+            <td style="padding:10px;font-family:monospace">PDO :named params</td>
+            <td style="padding:10px;text-align:center">✅</td>
+            <td style="padding:10px">อ่านง่ายกว่า เหมาะ query ยาว</td>
+        </tr>
+        <tr>
+            <td style="padding:10px;font-family:monospace">MySQLi bind_param</td>
+            <td style="padding:10px;text-align:center">✅</td>
+            <td style="padding:10px">MySQL เท่านั้น</td>
+        </tr>
+        <tr style="background:#f5f5f5">
+            <td style="padding:10px;font-family:monospace">ORM (Eloquent)</td>
+            <td style="padding:10px;text-align:center">✅</td>
+            <td style="padding:10px">Framework เช่น Laravel</td>
+        </tr>
+    </table>
+</div>
+
+</body>
+</html>
