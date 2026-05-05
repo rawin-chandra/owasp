@@ -284,6 +284,7 @@ echo "&lt;b&gt;" . htmlspecialchars($row['name']) . "&lt;/b&gt;: "
     <div class="attack-box">
         <strong>ลองโจมตี:</strong> เพิ่มใน URL:<br>
         <code>#&lt;img src=x onerror=alert('DOM XSS!')&gt;</code><br>
+        or <code>#&lt;svg onload=alert(1)&gt;</code><br>
         <small>server log จะไม่เห็น payload เลย เพราะ # ไม่ส่งไป server</small>
     </div>
     <div id="vuln-output" style="padding:10px;background:#fde8e8;border:1px solid #e74c3c;border-radius:4px;margin:8px 0;min-height:36px">
