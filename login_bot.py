@@ -1,3 +1,11 @@
+'''
+Code by T.S
+beware to use
+don't use in real server
+just use for learning
+
+'''
+
 import requests
 
 session = requests.Session()
