@@ -1,0 +1,50 @@
+<?php
+$host = "localhost";
+$user = "root";      // ปกติ XAMPP คือ root
+$pass = "";          // ปกติ XAMPP คือว่างไว้
+$dbname = "vul_test"; // เปลี่ยนเป็นชื่อ DB ของคุณ
+
+// เชื่อมต่อฐานข้อมูล
+$conn = new mysqli($host, $user, $pass, $dbname);
+
+// ตรวจสอบการเชื่อมต่อ
+if ($conn->connect_error) {
+    die("Connection failed: " . $conn->connect_error);
+}
+if ($_SERVER["REQUEST_METHOD"] == "POST") {
+    $user = $_POST['user'];
+    $pass = $_POST['pass'];
+   
+    $query = "SELECT id FROM users WHERE username = '$user' AND password = '$pass'";
+
+    echo ("query = " . $query);
+    $result = mysqli_query($conn, $query);
+
+    // นับจำนวนแถวที่เจอ
+    $count = mysqli_num_rows($result);
+
+    if ($count > 0) {
+        echo "Login สำเร็จ! พบข้อมูล $count แถว";
+        // ทำงานต่อ เช่น สร้าง Session
+    } else {
+        echo "Login ไม่สำเร็จ! user หรือ Password ไม่ถูกต้อง";
+    }
+}
+?>
+<html>
+<head>
+  <script>
+     function me() {
+        alert("Hello again");
+     }
+  </script>
+</head>
+<body>
+   <h2>log in page</h2>
+   <form method="POST" action=""> 
+     username: <input type="text" name="user"> <p>
+     password: <input type="text" name="pass"> <p>
+     <input type="submit" value="OK">
+   </form>
+</body>
+</html>
